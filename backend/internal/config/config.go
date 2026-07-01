@@ -60,6 +60,15 @@ type Config struct {
 		OnTrip        bool   `yaml:"on_trip"`
 		WebhookURLEnv string `yaml:"webhook_url_env"`
 	} `yaml:"alerts"`
+
+	Auth struct {
+		SharedSecretEnv string `yaml:"shared_secret_env"`
+	} `yaml:"auth"`
+
+	Upstream struct {
+		URLEnv         string `yaml:"url_env"`
+		TimeoutSeconds int    `yaml:"timeout_seconds"`
+	} `yaml:"upstream"`
 }
 
 // Load reads and parses the AgentGuard YAML policy file at the given path.
@@ -107,5 +116,14 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Sandbox.ScopeDir == "" {
 		cfg.Sandbox.ScopeDir = "/tmp/agentguard-sessions"
+	}
+	if cfg.Auth.SharedSecretEnv == "" {
+		cfg.Auth.SharedSecretEnv = "AGENTGUARD_AUTH_SECRET"
+	}
+	if cfg.Upstream.URLEnv == "" {
+		cfg.Upstream.URLEnv = "AGENTGUARD_UPSTREAM_URL"
+	}
+	if cfg.Upstream.TimeoutSeconds == 0 {
+		cfg.Upstream.TimeoutSeconds = 15
 	}
 }
