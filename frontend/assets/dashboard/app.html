@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AgentGuard — Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<div class="wrap">
+  <nav>
+    <a class="logo" href="../../index.html"><span class="dot"></span>AGENTGUARD</a>
+    <div class="links">
+      <a href="../../index.html">Home</a>
+      <a href="../../index.html#pricing">Pricing</a>
+    </div>
+    <a class="nav-cta" href="../../index.html#pricing">Upgrade to Enterprise →</a>
+  </nav>
+
+  <div class="dash-header">
+    <h1>Session Activity</h1>
+    <p id="conn-status">Connecting to proxy <span class="status-offline">●</span></p>
+  </div>
+
+  <div class="stat-row">
+    <div class="stat-card">
+      <div class="label">Calls today</div>
+      <div class="value" id="stat-total">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Allowed</div>
+      <div class="value ok" id="stat-allowed">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Breaker trips</div>
+      <div class="value bad" id="stat-tripped">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Policy blocks</div>
+      <div class="value bad" id="stat-blocked">—</div>
+    </div>
+  </div>
+
+  <div class="dash-grid">
+    <div class="panel">
+      <div class="panel-head">
+        <span>Recent tool calls</span>
+        <span id="last-updated">—</span>
+      </div>
+      <table class="session-table" id="session-table">
+        <thead>
+          <tr>
+            <th>Session</th>
+            <th>Method</th>
+            <th>Status</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody id="session-tbody">
+          <!-- populated by JS -->
+        </tbody>
+      </table>
+      <div class="empty-state" id="empty-state" style="display:none;">
+        No calls yet. Point an agent at your <code>/mcp</code> endpoint to see activity here.
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span>Tool policy</span></div>
+      <div class="tool-list" id="policy-list">
+        <div class="empty-state">Policy loads from your backend config once connected.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <span>© 2026 AgentGuard</span>
+    <span>Dashboard — read-only view of proxy activity</span>
+  </footer>
+</div>
+
+<script>
+  // Points the dashboard at your running Go backend.
+  // Change this to your Cloud Run URL once deployed.
+  window.AGENTGUARD_API_BASE = "http://localhost:8080";
+</script>
+<script>
+/* ============================================================
+   Dashboard data fetching
+   Reads from the two live endpoints exposed by cmd/proxy/main.go:
+
+     GET {API_BASE}/logs/recent
+       → [{ session_id, method, status, ts }, ...]
+
+     GET {API_BASE}/policy
+       → { blocked: [...], destructive: [...], exempt_from_breaker: [...] }
+   ============================================================ */
+
+const API_BASE = window.AGENTGUARD_API_BASE || "http://localhost:8080";
+
+function fmtTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString();
+}
+
+function badgeClass(status) {
+  if (status === "ALLOWED") return "allowed";
+  if (status === "BLOCKED_BY_POLICY") return "blocked";
+  return "tripped";
+}
+
+async function refreshLogs() {
+  const statusEl = document.getElementById("conn-status");
+  try {
+    const res = await fetch(API_BASE.replace(/\/$/, "") + "/logs/recent", {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error("bad status " + res.status);
+    const logs = await res.json();
+
+    statusEl.innerHTML = 'Connected to proxy <span class="status-live">●</span>';
+
+    const tbody = document.getElementById("session-tbody");
+    const emptyState = document.getElementById("empty-state");
+    tbody.innerHTML = "";
+
+    if (!Array.isArray(logs) || logs.length === 0) {
+      emptyState.style.display = "block";
+    } else {
+      emptyState.style.display = "none";
+      let allowed = 0, tripped = 0, blocked = 0;
+
+      logs.forEach((entry) => {
+        if (entry.status === "ALLOWED") allowed++;
+        else if (entry.status === "BLOCKED_BY_POLICY") blocked++;
+        else tripped++;
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${escapeHtml(entry.session_id || "—")}</td>
+          <td>${escapeHtml(entry.method || "—")}</td>
+          <td><span class="badge ${badgeClass(entry.status)}">${escapeHtml(entry.status || "unknown")}</span></td>
+          <td>${fmtTime(entry.ts)}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById("stat-total").textContent = logs.length;
+      document.getElementById("stat-allowed").textContent = allowed;
+      document.getElementById("stat-tripped").textContent = tripped;
+      document.getElementById("stat-blocked").textContent = blocked;
+    }
+
+    document.getElementById("last-updated").textContent =
+      "updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    statusEl.innerHTML = 'Proxy unreachable <span class="status-offline">●</span>';
+  }
+}
+
+async function refreshPolicy() {
+  try {
+    const res = await fetch(API_BASE.replace(/\/$/, "") + "/policy", {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error("bad status " + res.status);
+    const policy = await res.json();
+
+    const list = document.getElementById("policy-list");
+    list.innerHTML = "";
+
+    const rows = [
+      ...(policy.blocked || []).map((n) => ({ name: n, tag: "blocked" })),
+      ...(policy.destructive || []).map((n) => ({ name: n, tag: "sandboxed" })),
+      ...(policy.exempt_from_breaker || []).map((n) => ({ name: n, tag: "exempt" })),
+    ];
+
+    if (rows.length === 0) {
+      list.innerHTML = '<div class="empty-state">No tool policy rules configured.</div>';
+      return;
+    }
+
+    rows.forEach((r) => {
+      const row = document.createElement("div");
+      row.className = "tool-row";
+      row.innerHTML = `<span class="name">${escapeHtml(r.name)}</span><span class="tag">${r.tag}</span>`;
+      list.appendChild(row);
+    });
+  } catch (e) {
+    // leave the default empty-state message in place
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+refreshLogs();
+refreshPolicy();
+setInterval(refreshLogs, 5000);
+</script>
+
+</body>
+</html>

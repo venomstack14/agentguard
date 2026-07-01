@@ -1,0 +1,84 @@
+# agentguard.yaml
+# Policy configuration for the AgentGuard proxy.
+# Loaded at startup by cmd/proxy/main.go
+
+server:
+  port: 8080
+  log_level: info          # debug | info | warn | error
+
+# --- Circuit Breaker (breaker.go) ---
+breaker:
+  window_seconds: 30       # rolling window for call counting
+  max_calls_per_window: 10 # trip threshold within the window
+  similarity_threshold: 0.9 # 0-1, how similar repeated calls must be to count
+  cooldown_seconds: 60     # how long a tripped session stays frozen
+
+# --- Secret Redaction (redactor.go) ---
+redaction:
+  enabled: true
+  mask_responses: true     # also scrub data flowing back to the agent
+  rules:
+    - name: openai_key
+      pattern: 'sk-[a-zA-Z0-9]{48}'
+      mask_with: "<REDACTED_API_KEY>"
+    - name: postgres_uri
+      pattern: 'postgres://[a-zA-Z0-9_]+:[^@]+@[a-zA-Z0-9.-]+:[0-9]+/?[a-zA-Z0-9_]*'
+      mask_with: "<REDACTED_DB_URI>"
+    - name: bearer_token
+      pattern: '(?i)bearer\s+[a-zA-Z0-9\-._~+/]+=*'
+      mask_with: "Bearer <REDACTED_TOKEN>"
+    - name: email
+      pattern: '[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}'
+      mask_with: "<REDACTED_EMAIL>"
+
+# --- Sandbox (sandbox.go) ---
+sandbox:
+  enabled: true
+  scope_dir: "/tmp/agentguard-sessions"  # ephemeral root per session
+  allow_write: true
+  allow_network: false
+  landlock: true            # enforce kernel-level fs restrictions (Linux only)
+
+# --- Tool policy ---
+tools:
+  # Tools that always require sandboxing, regardless of payload
+  destructive:
+    - delete_user
+    - drop_table
+    - rm
+    - write_file
+    - exec_shell
+
+  # Tools that are always blocked outright
+  blocked: []
+
+  # Tools allowed to bypass the breaker rate limit (e.g. health checks)
+  exempt_from_breaker:
+    - ping
+    - health_check
+
+# --- Storage backends (free-tier defaults) ---
+storage:
+  upstash:
+    url_env: UPSTASH_REDIS_REST_URL
+    token_env: UPSTASH_REDIS_REST_TOKEN
+  supabase:
+    url_env: SUPABASE_URL
+    key_env: SUPABASE_KEY
+
+# --- Alerting ---
+alerts:
+  on_trip: true
+  webhook_url_env: AGENTGUARD_ALERT_WEBHOOK   # e.g. Slack/Discord incoming webhook
+
+  tools:
+  destructive:
+    - delete_user
+    - drop_table
+    - rm
+    - write_file
+    - exec_shell
+  blocked: []
+  exempt_from_breaker:
+    - ping
+    - health_check

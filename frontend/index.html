@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AgentGuard — Semantic Circuit Breaker for AI Agents</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<style>
+/* Page-specific styles that don't belong in the shared stylesheet */
+.hero{
+  padding:90px 0 70px;
+  display:grid;grid-template-columns:1.1fr 0.9fr;gap:40px;align-items:center;
+}
+.eyebrow{
+  font-family:var(--mono);font-size:12.5px;color:var(--signal);
+  letter-spacing:0.12em;text-transform:uppercase;
+  display:flex;align-items:center;gap:10px;margin-bottom:22px;
+}
+.eyebrow::before{content:"";width:18px;height:1px;background:var(--signal);}
+h1{
+  font-size:54px;line-height:1.05;font-weight:700;letter-spacing:-0.02em;
+  margin-bottom:22px;
+}
+h1 .accent{color:var(--signal);}
+.hero p.sub{
+  font-size:17px;color:var(--text-dim);line-height:1.6;max-width:480px;margin-bottom:32px;
+}
+.cta-row{display:flex;gap:14px;align-items:center;margin-bottom:36px;}
+.hero-stats{display:flex;gap:34px;font-family:var(--mono);}
+.hero-stats div{display:flex;flex-direction:column;gap:4px;}
+.hero-stats .n{font-size:20px;font-weight:700;color:var(--text);}
+.hero-stats .l{font-size:11.5px;color:var(--text-dim);}
+
+section{padding:90px 0;border-top:1px solid var(--line);}
+.section-head{max-width:560px;margin-bottom:54px;}
+.section-head .eyebrow{margin-bottom:16px;}
+.section-head h2{font-size:34px;font-weight:700;letter-spacing:-0.015em;line-height:1.15;margin-bottom:14px;}
+.section-head p{color:var(--text-dim);font-size:15.5px;line-height:1.65;}
+
+.threats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);}
+.threat{background:var(--bg);padding:32px 26px;}
+.threat .tag{font-family:var(--mono);font-size:11px;color:var(--danger);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:18px;}
+.threat h3{font-size:19px;margin-bottom:12px;font-weight:600;}
+.threat p{font-size:14px;color:var(--text-dim);line-height:1.65;}
+
+.pipeline{display:flex;align-items:center;justify-content:space-between;margin-top:10px;flex-wrap:wrap;gap:16px;}
+.pnode{font-family:var(--mono);font-size:13px;border:1px solid var(--line);background:var(--bg-raised);padding:16px 20px;border-radius:5px;text-align:center;flex:1;min-width:150px;}
+.pnode.guard{border-color:var(--signal-dim);background:rgba(93,255,176,0.04);}
+.pnode .t{color:var(--text-dim);font-size:10.5px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px;}
+.pnode .n{color:var(--text);font-weight:500;}
+.pnode.guard .n{color:var(--signal);}
+.arrow{font-family:var(--mono);color:var(--text-dim);font-size:18px;}
+
+.modules{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:10px;}
+.module{border:1px solid var(--line);border-radius:6px;padding:28px 24px;background:var(--bg-raised);transition:border-color .2s;}
+.module:hover{border-color:var(--signal-dim);}
+.module .idx{font-family:var(--mono);font-size:11px;color:var(--signal);margin-bottom:16px;}
+.module h3{font-family:var(--mono);font-size:15px;margin-bottom:12px;color:var(--text);}
+.module p{font-size:13.8px;color:var(--text-dim);line-height:1.65;margin-bottom:16px;}
+.module code{display:block;font-family:var(--mono);font-size:11.5px;color:var(--text-dim);background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:10px 12px;line-height:1.6;overflow-x:auto;}
+
+.pricing{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:10px;}
+.plan{border:1px solid var(--line);border-radius:6px;padding:36px 30px;background:var(--bg-raised);}
+.plan.featured{border-color:var(--signal-dim);position:relative;}
+.plan .ptag{font-family:var(--mono);font-size:11px;color:var(--text-dim);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:16px;}
+.plan.featured .ptag{color:var(--signal);}
+.plan .price{font-size:38px;font-weight:700;margin-bottom:6px;}
+.plan .price span{font-size:14px;color:var(--text-dim);font-weight:400;font-family:var(--mono);}
+.plan .pdesc{font-size:13.5px;color:var(--text-dim);margin-bottom:24px;}
+.plan ul{list-style:none;}
+.plan li{font-size:13.8px;color:var(--text);padding:9px 0;border-top:1px solid var(--line);display:flex;gap:10px;}
+.plan li::before{content:"→";color:var(--signal);font-family:var(--mono);}
+
+.cta-final{text-align:center;padding:100px 0;}
+.cta-final h2{font-size:38px;font-weight:700;margin-bottom:18px;letter-spacing:-0.015em;}
+.cta-final p{color:var(--text-dim);font-size:15.5px;margin-bottom:34px;}
+
+@media(max-width:860px){
+  .hero{grid-template-columns:1fr;}
+  h1{font-size:38px;}
+  .threats{grid-template-columns:1fr;}
+  .modules{grid-template-columns:1fr;}
+  .pricing{grid-template-columns:1fr;}
+  nav .links{display:none;}
+  .pipeline{flex-direction:column;}
+  .arrow{transform:rotate(90deg);}
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <nav>
+    <a class="logo" href="index.html"><span class="dot"></span>AGENTGUARD</a>
+    <div class="links">
+      <a href="#threats">Threats</a>
+      <a href="#how">How it works</a>
+      <a href="#pricing">Pricing</a>
+      <a href="dashboard/app.html">Dashboard</a>
+    </div>
+    <a class="nav-cta" href="#pricing">Get started →</a>
+  </nav>
+
+  <div class="hero">
+    <div>
+      <div class="eyebrow">Semantic Circuit Breaker</div>
+      <h1>Your AI agents will misbehave.<br>Make sure it's <span class="accent">cheap</span> when they do.</h1>
+      <p class="sub">A reverse proxy that sits between your agent framework and the outside world — tripping runaway loops, sandboxing destructive tool calls, and blocking prompt injection before it touches your infrastructure.</p>
+      <div class="cta-row">
+        <a class="btn-primary" href="#pricing">Deploy AgentGuard</a>
+        <a class="btn-ghost" href="#how">See how it intercepts →</a>
+      </div>
+      <div class="hero-stats">
+        <div><span class="n">&lt;10ms</span><span class="l">added latency</span></div>
+        <div><span class="n">10/30s</span><span class="l">default trip threshold</span></div>
+        <div><span class="n">$0</span><span class="l">to self-host</span></div>
+      </div>
+    </div>
+
+    <div class="terminal">
+      <div class="bar"><span></span><span></span><span></span><div class="label">agentguard · live session</div></div>
+      <div class="body" data-agentguard-terminal>
+        <!-- populated by assets/js/terminal.js -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<section id="threats">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">The problem</div>
+      <h2>Three failure modes traditional security can't see</h2>
+      <p>WAFs and API gateways inspect HTTP shape. They have no concept of what an autonomous agent is trying to do, or whether it should be doing it right now.</p>
+    </div>
+    <div class="threats">
+      <div class="threat">
+        <div class="tag">Runaway loops</div>
+        <h3>The financial killer</h3>
+        <p>A stuck agent can call your LLM API recursively thousands of times in an evening, turning a logic bug into a five-figure invoice before anyone notices.</p>
+      </div>
+      <div class="threat">
+        <div class="tag">Indirect injection</div>
+        <h3>The security nightmare</h3>
+        <p>Untrusted data — an email, a webpage, a ticket — can carry hidden instructions. The model can't tell "system prompt" from "thing I just read," and executes anyway.</p>
+      </div>
+      <div class="threat">
+        <div class="tag">Destructive execution</div>
+        <h3>The blast radius</h3>
+        <p>Agents now hold write access — files, containers, databases. One bad tool call argument and there's no undo button.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">How it works</div>
+      <h2>One proxy, three checkpoints</h2>
+      <p>AgentGuard sits in the path of every tool call your agent makes — not after the fact, in line, before execution.</p>
+    </div>
+    <div class="pipeline">
+      <div class="pnode"><div class="t">Origin</div><div class="n">Agent framework</div></div>
+      <div class="arrow">→</div>
+      <div class="pnode guard"><div class="t">Checkpoint</div><div class="n">AgentGuard proxy</div></div>
+      <div class="arrow">→</div>
+      <div class="pnode"><div class="t">Destination</div><div class="n">Database / API / FS</div></div>
+    </div>
+
+    <div class="modules" style="margin-top:64px;">
+      <div class="module">
+        <div class="idx">interceptor</div>
+        <h3>main.go</h3>
+        <p>Authenticates the agent session, decodes the JSON-RPC tool payload, and routes it through the breaker and scanner before anything executes.</p>
+        <code>tool: "delete_user"<br>args: {id: 19}<br>→ forwarded for inspection</code>
+      </div>
+      <div class="module">
+        <div class="idx">circuit breaker</div>
+        <h3>breaker.go</h3>
+        <p>Tracks call frequency and semantic similarity in a rolling window. More than 10 near-identical calls in 30 seconds trips the breaker and freezes the session.</p>
+        <code>window: 30s<br>threshold: 10 calls<br>similarity: &gt;90%</code>
+      </div>
+      <div class="module">
+        <div class="idx">sandbox</div>
+        <h3>sandbox.go</h3>
+        <p>Routes write operations into an isolated namespace with Landlock filesystem restrictions. If the agent tries to leave its directory, the kernel blocks it.</p>
+        <code>scope: /tmp/session-id/<br>landlock: enforced<br>escape attempts: 0 allowed</code>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Pricing</div>
+      <h2>Self-host free. Scale when you need to.</h2>
+      <p>The proxy is open source. The hosted version is for teams running fleets of production agents.</p>
+    </div>
+    <div class="pricing">
+      <div class="plan">
+        <div class="ptag">Self-hosted</div>
+        <div class="price">$0</div>
+        <div class="pdesc">Run the Go proxy yourself on Cloud Run, Supabase, and Upstash free tiers.</div>
+        <ul>
+          <li>Full breaker + sandbox source</li>
+          <li>YAML policy definitions</li>
+          <li>Local audit logs</li>
+          <li>Community support</li>
+        </ul>
+      </div>
+      <div class="plan featured">
+        <div class="ptag">Enterprise</div>
+        <div class="price">$420<span>/mo flat</span></div>
+        <div class="pdesc">For platforms running production agent fleets at scale.</div>
+        <ul>
+          <li>Multi-tenant centralized logging</li>
+          <li>Single sign-on</li>
+          <li>Real-time compliance reporting</li>
+          <li>Priority incident response</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="cta-final wrap">
+  <h2>Stop trusting your agents.<br>Start checking them.</h2>
+  <p>Three Go files stand between your infrastructure and a $10,000 mistake.</p>
+  <a class="btn-primary" href="#">Read the source on GitHub</a>
+</div>
+
+<div class="wrap">
+  <footer>
+    <span>© 2026 AgentGuard</span>
+    <span>Built for agents that should know better</span>
+  </footer>
+</div>
+
+<script>
+  // Points the hero terminal and dashboard at your running Go backend.
+  // Change this to your Cloud Run URL once deployed.
+  window.AGENTGUARD_API_BASE = "http://localhost:8080";
+</script>
+<script src="assets/js/terminal.js"></script>
+
+</body>
+</html>
