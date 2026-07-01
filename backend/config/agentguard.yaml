@@ -71,14 +71,11 @@ alerts:
   on_trip: true
   webhook_url_env: AGENTGUARD_ALERT_WEBHOOK   # e.g. Slack/Discord incoming webhook
 
-  tools:
-  destructive:
-    - delete_user
-    - drop_table
-    - rm
-    - write_file
-    - exec_shell
-  blocked: []
-  exempt_from_breaker:
-    - ping
-    - health_check
+# --- Auth (main.go reads the named env var for the shared secret) ---
+auth:
+  shared_secret_env: AGENTGUARD_AUTH_SECRET
+
+# --- Upstream MCP server the proxy forwards allowed calls to ---
+upstream:
+  url_env: AGENTGUARD_UPSTREAM_URL
+  timeout_seconds: 15
