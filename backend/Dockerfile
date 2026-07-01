@@ -1,40 +1,36 @@
-# Stage 1: HARDENED BUILDER
-FROM golang:1.22-alpine AS builder
+# ============================================================
+# AgentGuard — backend Dockerfile
+# Multi-stage build: compile a small static binary, then run it
+# in a minimal image for fast, cheap deploys (Cloud Run, Render, etc.)
+# ============================================================
 
-# Set system configurations for a secure, static build
-ENV CGO_ENABLED=0 \
-    GOOS=linux \
-    GOARCH=amd64
+# --- Stage 1: Build ---
+FROM golang:1.22-alpine AS builder
 
 WORKDIR /app
 
-# Copy dependency manifests first to leverage Docker caching
-COPY go.mod go.sum./
+# Copy go.mod and go.sum first so dependency downloads are cached
+# separately from source code changes (faster rebuilds)
+COPY go.mod go.sum ./
 RUN go mod download
 
 # Copy the rest of the source code
-COPY..
+COPY . .
 
 # Compile a statically linked, stripped production binary
-RUN go build \
-    -ldflags="-s -w -extldflags '-static'" \
-    -o /app/agentguard-proxy \
-   ./cmd/proxy/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o app ./cmd/proxy
 
-# Stage 2: ULTRALIGHT & SECURE RUNTIME
-FROM scratch
+# --- Stage 2: Run ---
+FROM alpine:3.19
 
-# Import system SSL/TLS root certificates (needed for secure Out-of-Band API calls)
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+WORKDIR /app
 
-# Copy our statically compiled proxy binary
-COPY --from=builder /app/agentguard-proxy /agentguard-proxy
+# Certificates needed for outbound HTTPS calls (Supabase, Upstash)
+RUN apk --no-cache add ca-certificates
 
-# Run as non-root (UID 65534 is the default 'nobody' user in Linux)
-USER 65534:65534
+COPY --from=builder /app/app .
+COPY --from=builder /app/config ./config
 
-# Expose the hardened JSON-RPC port
 EXPOSE 8080
 
-# Run the proxy engine
-ENTRYPOINT ["/agentguard-proxy"]
+CMD ["./app"]
