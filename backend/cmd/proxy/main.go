@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -85,9 +89,28 @@ func main() {
 	log.Printf("[INFO] Policy loaded: %d blocked, %d destructive, %d breaker-exempt tools",
 		len(cfg.Tools.Blocked), len(cfg.Tools.Destructive), len(cfg.Tools.ExemptFromBreaker))
 
+	authSecret := ""
+	if cfg.Auth.SharedSecretEnv != "" {
+		authSecret = os.Getenv(cfg.Auth.SharedSecretEnv)
+	}
+	if authSecret == "" {
+		log.Println("[WARN] No AGENTGUARD_AUTH_SECRET set - /mcp will reject all requests until one is configured")
+	}
+
+	upstreamURL := ""
+	if cfg.Upstream.URLEnv != "" {
+		upstreamURL = os.Getenv(cfg.Upstream.URLEnv)
+	}
+	if upstreamURL == "" {
+		log.Println("[WARN] No upstream MCP server configured (AGENTGUARD_UPSTREAM_URL) - allowed calls cannot be forwarded")
+	}
+	upstreamClient := &http.Client{
+		Timeout: time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second,
+	}
+
 	// Hardened routing
 	mux := http.NewServeMux()
-	mux.HandleFunc("/mcp", handleProxy(circuitBreaker, dbLogger, policyEngine))
+	mux.HandleFunc("/mcp", handleProxy(circuitBreaker, dbLogger, policyEngine, authSecret, upstreamURL, upstreamClient))
 	mux.HandleFunc("/logs/recent", withCORS(handleRecentLogs(dbLogger)))
 	mux.HandleFunc("/policy", withCORS(handlePolicy(policyEngine)))
 
@@ -143,7 +166,7 @@ func panicRecoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func handleProxy(cb *breaker.Breaker, db *database.AsyncLogger, pe *policy.Engine) http.HandlerFunc {
+func handleProxy(cb *breaker.Breaker, db *database.AsyncLogger, pe *policy.Engine, authSecret, upstreamURL string, upstreamClient *http.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Strict HTTP boundaries
 		if r.Method != http.MethodPost {
@@ -154,14 +177,17 @@ func handleProxy(cb *breaker.Breaker, db *database.AsyncLogger, pe *policy.Engin
 		// Enforce a strict 1MB input limit to completely block heap exhaustion exploits
 		r.Body = http.MaxBytesReader(w, r.Body, 1048576)
 
-		// Authenticate using OBO/JWT headers securely
+		// Authenticate against the configured shared secret. If no secret is
+		// configured server-side, fail closed instead of accepting every
+		// token (the previous implementation was a stub that let any
+		// non-magic-string token through - see git history).
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 			http.Error(w, "Unauthorized (Missing/Invalid Token Format)", http.StatusUnauthorized)
 			return
 		}
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		sessionID, err := validateSessionToken(token)
+		sessionID, err := validateSessionToken(token, authSecret)
 		if err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -222,29 +248,78 @@ func handleProxy(cb *breaker.Breaker, db *database.AsyncLogger, pe *policy.Engin
 			}
 		}
 
-		// 3. Sandboxing destructive operations strictly, per the policy engine's list
+		// 3. Forward the (redacted, checked) call to the real upstream MCP
+		//    server. Destructive tools are routed through the Landlock
+		//    sandbox so the forwarding call itself runs under the fs
+		//    restriction, not just a logged no-op.
+		forward := func() (*JSONRPCResponse, int, error) {
+			return forwardToUpstream(r.Context(), upstreamClient, upstreamURL, req)
+		}
+
+		var upstreamResp *JSONRPCResponse
+		var statusCode int
+		var fwdErr error
+
 		if req.Method == "tools/call" && toolName != "" && pe.IsDestructive(toolName) {
 			sandboxErr := sandbox.ExecuteSandboxed(func() {
-				log.Println(" Execution context isolated successfully")
+				upstreamResp, statusCode, fwdErr = forward()
 			})
 			if sandboxErr != nil {
 				writeJSONRPCError(w, req.ID, -32603, "Sandbox initialization failure")
+				db.QueueLog(sessionID, req.Method, toolName, "SANDBOX_FAILURE")
 				return
 			}
+		} else {
+			upstreamResp, statusCode, fwdErr = forward()
 		}
 
-		// Log execution success asynchronously
-		db.QueueLog(sessionID, req.Method, string(req.Params), "ALLOWED")
-
-		// Mock output logic for proxying downstreams safely
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			Result:  map[string]interface{}{"status": "success", "sanitized": true},
-			ID:      req.ID,
+		if fwdErr != nil {
+			log.Printf("[ERROR] Upstream forwarding failed: %v", fwdErr)
+			writeJSONRPCError(w, req.ID, -32603, "Upstream MCP server unreachable")
+			db.QueueLog(sessionID, req.Method, toolName, "UPSTREAM_ERROR")
+			return
 		}
+
+		db.QueueLog(sessionID, req.Method, toolName, "ALLOWED")
+
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		w.WriteHeader(statusCode)
+		_ = json.NewEncoder(w).Encode(upstreamResp)
 	}
+}
+
+// forwardToUpstream sends the (already policy-checked, redacted) JSON-RPC
+// request to the configured upstream MCP server and relays its response.
+// If no upstream is configured, it returns a clear error rather than
+// fabricating a fake success response.
+func forwardToUpstream(ctx context.Context, client *http.Client, upstreamURL string, req JSONRPCRequest) (*JSONRPCResponse, int, error) {
+	if upstreamURL == "" {
+		return nil, http.StatusBadGateway, errors.New("no upstream MCP server configured (set AGENTGUARD_UPSTREAM_URL)")
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	defer resp.Body.Close()
+
+	var out JSONRPCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+
+	return &out, resp.StatusCode, nil
 }
 
 // withCORS allows the static dashboard (served from a different origin,
@@ -319,13 +394,44 @@ func handlePolicy(pe *policy.Engine) http.HandlerFunc {
 	}
 }
 
-func validateSessionToken(token string) (string, error) {
-	// Secure cryptographic signature verifications or session checks go here.
-	// For production, use jose to inspect JWT structures securely.
-	if token == "malicious-attacker" {
+// validateSessionToken checks the bearer token against the server's shared
+// secret using a constant-time comparison. This intentionally does NOT
+// accept arbitrary tokens: if authSecret is empty (misconfiguration) or the
+// token doesn't match, the request is rejected. The session ID returned is
+// derived from an HMAC of the token so it can't be forged without the secret.
+//
+// For multi-tenant setups, swap this for real JWT verification (e.g. via
+// github.com/golang-jwt/jwt) so each caller gets its own verifiable claims
+// instead of a single shared secret.
+func validateSessionToken(token, authSecret string) (string, error) {
+	if authSecret == "" {
+		return "", errors.New("server has no auth secret configured")
+	}
+	if token == "" {
+		return "", errors.New("empty token")
+	}
+
+	// Simplest viable scheme: the token itself IS the shared secret,
+	// compared in constant time to avoid timing side-channels. Swap this
+	// for real per-caller JWT verification once user auth exists upstream.
+	if subtle.ConstantTimeCompare([]byte(token), []byte(authSecret)) != 1 {
 		return "", errors.New("signature verification failed")
 	}
-	return "sess_prod_01", nil
+
+	mac := hmac.New(sha256.New, []byte(authSecret))
+	mac.Write([]byte(token))
+	sessionID := "sess_" + hexEncode(mac.Sum(nil))[:16]
+	return sessionID, nil
+}
+
+func hexEncode(b []byte) string {
+	const hexChars = "0123456789abcdef"
+	out := make([]byte, len(b)*2)
+	for i, c := range b {
+		out[i*2] = hexChars[c>>4]
+		out[i*2+1] = hexChars[c&0x0f]
+	}
+	return string(out)
 }
 
 func writeJSONRPCError(w http.ResponseWriter, id interface{}, code int, msg string) {
